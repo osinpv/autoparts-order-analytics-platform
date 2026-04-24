@@ -6,7 +6,13 @@ from sqlalchemy import pool
 from alembic import context
 
 from app.models.base import Base
-from app.models import product
+import app.models.all_models
+
+# We set the include_name function to filter out schemas other than 'autoparts_owner' and None
+def include_name(name, type_, parent_names):
+    if type_ == "schema":
+        return name in [None, "autoparts_owner"]
+    return True
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -48,6 +54,9 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        include_schemas=True,
+        include_name=include_name,
+        version_table_schema="autoparts_owner",
     )
 
     with context.begin_transaction():
@@ -69,7 +78,11 @@ def run_migrations_online() -> None:
 
     with connectable.connect() as connection:
         context.configure(
-            connection=connection, target_metadata=target_metadata
+            connection=connection, 
+            target_metadata=target_metadata,
+            include_schemas=True,
+            include_name=include_name,
+            version_table_schema="autoparts_owner",
         )
 
         with context.begin_transaction():
