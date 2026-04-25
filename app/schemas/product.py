@@ -25,3 +25,17 @@ class ProductRead(BaseModel):
     updated_datetime: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class ProductDetailsRead(BaseModel):
+    product_id: int
+    sku: str
+    product_name: str
+    category_id: int | None
+    category_name: str | None
+    brand_id: int | None
+    brand_name: str | None
+    price: Decimal
+    is_active: bool
+    created_datetime: datetime
+    updated_datetime: datetime

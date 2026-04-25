@@ -1,4 +1,4 @@
-from sqlalchemy import ForeignKey, Integer, UniqueConstraint
+from sqlalchemy import CheckConstraint, ForeignKey, Integer, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
@@ -12,6 +12,18 @@ class InventoryBalance(TimestampMixin, Base):
             "warehouse_id",
             "product_id",
             name="uq_inventory_balance_warehouse_product",
+        ),
+        CheckConstraint(
+            "on_hand_qty >= 0",
+            name="ck_inventory_balance_on_hand_nonnegative",
+        ),
+        CheckConstraint(
+            "reserved_qty >= 0",
+            name="ck_inventory_balance_reserved_nonnegative",
+        ),
+        CheckConstraint(
+            "reserved_qty <= on_hand_qty",
+            name="ck_inventory_balance_reserved_not_gt_on_hand",
         ),
         {"schema": "autoparts_owner"},
     )
@@ -37,3 +49,12 @@ class InventoryBalance(TimestampMixin, Base):
         nullable=False,
         default=0,
     )
+    version_num: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=1,
+    )
+
+    __mapper_args__ = {
+        "version_id_col": version_num,
+    }

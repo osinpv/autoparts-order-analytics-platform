@@ -1,1 +1,214 @@
-Generic single-database configuration.
+# AutoParts Order & Analytics Platform
+
+A project focused on designing a transactional retail backend with strong database-oriented architecture.
+
+Current scope includes:
+- product and warehouse master data
+- inventory balance management
+- inventory movement ledger
+- transactional inventory operations
+- concurrency control patterns
+- API-first implementation with FastAPI + PostgreSQL
+
+
+
+## Implemented features
+
+Current implementation covers the core inventory foundation of a transactional retail platform:
+
+- Product domain:
+  - product categories
+  - product brands
+  - products
+  - warehouses
+
+- Inventory domain:
+  - current inventory balance per `(warehouse, product)`
+  - inventory reserve / release operations
+  - inventory receive / ship operations
+  - inventory movement ledger (history of all inventory changes)
+
+- API capabilities:
+  - create and list categories, brands, products, warehouses
+  - get entities by id
+  - enriched details endpoints for products and inventory balances
+  - filtered inventory search by:
+    - warehouse
+    - product
+    - SKU
+    - category
+    - brand
+
+- Data integrity:
+  - unique constraints
+  - foreign keys
+  - check constraints for inventory quantities
+  - typed movement and reference values with database validation
+
+- Concurrency controls:
+  - optimistic versioning on `inventory_balance`
+  - pessimistic row locking for hot inventory mutation paths
+  - lock timeout handling for busy inventory rows
+
+
+
+## Inventory architecture
+
+The inventory module is intentionally split into two layers:
+
+### 1. `inventory_balance`
+Stores the **current state** of inventory for a single `(warehouse, product)` pair.
+
+Fields include:
+- `on_hand_qty`
+- `reserved_qty`
+
+`available_qty` is **not stored physically** in this table.
+It is derived as:
+
+`available_qty = on_hand_qty - reserved_qty`
+
+This keeps the current-state table cleaner and reduces the risk of storing inconsistent derived data.
+
+### 2. `inventory_movement`
+Stores the **history of inventory changes**.
+
+Each movement records:
+- movement type
+- quantity
+- business reference type / reference id
+- resulting inventory snapshot after the operation:
+  - `resulting_on_hand_qty`
+  - `resulting_reserved_qty`
+  - `resulting_available_qty` is calculated in the API layer
+
+This design allows the system to answer both questions:
+
+- **What is the current state?** → `inventory_balance`
+- **How did the system get there?** → `inventory_movement`
+
+This is a common pattern in transactional systems where current-state reads must be fast, but auditability and historical reconstruction are also required.
+
+
+
+## Inventory operations
+
+The following business operations are currently implemented:
+
+- `reserve`
+- `release`
+- `receive`
+- `ship`
+
+### Reserve
+Increases `reserved_qty` if enough inventory is available.
+
+### Release
+Decreases `reserved_qty` if sufficient quantity is currently reserved.
+
+### Receive
+Increases `on_hand_qty` when inventory is received into stock.
+
+### Ship
+Decreases both:
+- `on_hand_qty`
+- `reserved_qty`
+
+This models shipment of already reserved inventory.
+
+Every successful inventory mutation also writes a ledger entry into `inventory_movement` within the same transaction.
+
+
+
+## Concurrency strategy
+
+Two concurrency control techniques are intentionally demonstrated in this project:
+
+### Optimistic locking
+`inventory_balance` includes a `version_num` column and SQLAlchemy versioning support.
+
+This protects against lost updates and demonstrates an optimistic concurrency pattern.
+
+### Pessimistic locking
+For hot inventory mutation paths (`reserve`, `release`, `receive`, `ship`), the implementation uses:
+
+`SELECT ... FOR UPDATE`
+
+This was chosen because inventory rows are contention-prone and business-critical.
+
+With pessimistic locking:
+- concurrent updates are serialized
+- each transaction checks the most current state
+- oversell risk is reduced
+- clients get a business result based on actual latest inventory
+
+### Lock timeout
+Hot-path locking also uses a lock timeout.
+If a row remains locked for too long, the API returns a controlled error such as:
+
+`Resource busy, try again later.`
+
+This avoids indefinite waiting and makes concurrency behavior more predictable for API consumers.
+
+
+
+## Data integrity rules
+
+### `inventory_balance`
+Database constraints enforce:
+- `on_hand_qty >= 0`
+- `reserved_qty >= 0`
+- `reserved_qty <= on_hand_qty`
+
+### `inventory_movement`
+Database constraints enforce:
+- `qty > 0`
+- `resulting_on_hand_qty >= 0`
+- `resulting_reserved_qty >= 0`
+- `resulting_reserved_qty <= resulting_on_hand_qty`
+
+Allowed movement types and reference types are also validated at both:
+- application level
+- database level
+
+
+
+## Demo scenario
+
+A simple demo flow for the current implementation:
+
+1. Create a warehouse
+2. Create a product category
+3. Create a product brand
+4. Create a product
+5. Create an inventory balance
+6. Reserve inventory
+7. Release reservation
+8. Receive additional stock
+9. Ship reserved inventory
+10. Inspect inventory ledger history
+
+This demonstrates:
+- current-state updates
+- event history tracking
+- derived availability
+- business validations
+- concurrency-safe mutation flow
+
+
+
+## Why this design
+
+This implementation intentionally favors clarity of transactional behavior over excessive abstraction.
+
+Key design choices:
+- `available_qty` is derived, not stored in `inventory_balance`
+- ledger stores resulting state snapshots to simplify historical investigation
+- hot inventory mutations use pessimistic locking
+- optimistic versioning remains in place as an additional concurrency example
+- reference types are typed and validated to prepare the model for future order / shipment integration
+
+
+
+
+

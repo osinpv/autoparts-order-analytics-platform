@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -9,6 +9,13 @@ from app.models.product_category import ProductCategory
 from app.schemas.product_category import ProductCategoryCreate, ProductCategoryRead
 
 router = APIRouter(tags=["categories"])
+
+
+def get_category_or_404(category_id: int, db: Session) -> ProductCategory:
+    category = db.get(ProductCategory, category_id)
+    if category is None:
+        raise HTTPException(status_code=404, detail="Category not found.")
+    return category
 
 
 @router.post("/categories", response_model=ProductCategoryRead)
@@ -36,3 +43,8 @@ def get_categories(db: Session = Depends(get_db)):
     stmt = select(ProductCategory).order_by(ProductCategory.category_id)
     categories = db.execute(stmt).scalars().all()
     return categories
+
+
+@router.get("/categories/{category_id}", response_model=ProductCategoryRead)
+def get_category(category_id: int, db: Session = Depends(get_db)):
+    return get_category_or_404(category_id, db)
