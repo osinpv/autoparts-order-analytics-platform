@@ -173,30 +173,6 @@ Allowed movement types and reference types are also validated at both:
 
 
 
-## Demo scenario
-
-A simple demo flow for the current implementation:
-
-1. Create a warehouse
-2. Create a product category
-3. Create a product brand
-4. Create a product
-5. Create an inventory balance
-6. Reserve inventory
-7. Release reservation
-8. Receive additional stock
-9. Ship reserved inventory
-10. Inspect inventory ledger history
-
-This demonstrates:
-- current-state updates
-- event history tracking
-- derived availability
-- business validations
-- concurrency-safe mutation flow
-
-
-
 ## Why this design
 
 This implementation intentionally favors clarity of transactional behavior over excessive abstraction.
@@ -209,6 +185,165 @@ Key design choices:
 - reference types are typed and validated to prepare the model for future order / shipment integration
 
 
+## Order workflow
+
+The project currently implements a minimal transactional order lifecycle:
+
+- `NEW`
+- `RESERVED`
+- `RELEASED`
+- `SHIPPED`
+
+### `POST /orders`
+Creates an order header and order items.
+
+Important design choice:
+- client does **not** provide item price
+- server loads the current product price from `product.price`
+- `sales_order_item.unit_price` stores the price snapshot at the time of order creation
+- `line_amount` and `order_total_amount` are calculated server-side
+
+This prevents clients from manipulating pricing in the order request.
 
 
+
+## Order and inventory integration
+
+Inventory is not reserved automatically during order creation.
+
+Instead, the workflow is intentionally split into explicit business actions:
+
+### `POST /orders/{order_id}/reserve`
+- allowed only for orders in `NEW` status
+- locks affected inventory rows using pessimistic locking
+- validates available quantity for each order item
+- increases `reserved_qty`
+- writes `RESERVE` entries into `inventory_movement`
+- updates order status to `RESERVED`
+
+### `POST /orders/{order_id}/release`
+- allowed only for orders in `RESERVED` status
+- decreases `reserved_qty`
+- writes `RELEASE` entries into `inventory_movement`
+- updates order status to `RELEASED`
+
+### `POST /orders/{order_id}/ship`
+- allowed only for orders in `RESERVED` status
+- decreases both:
+  - `on_hand_qty`
+  - `reserved_qty`
+- writes `SHIP` entries into `inventory_movement`
+- updates order status to `SHIPPED`
+
+
+
+## Transactional guarantees
+
+Order reservation and shipment flows are implemented as multi-row transactional operations.
+
+For each order item, the application:
+
+- locates the corresponding inventory balance by `(warehouse_id, product_id)`
+- locks the row with `SELECT ... FOR UPDATE`
+- validates inventory state
+- updates current balance
+- writes ledger history
+
+If any item fails validation, the entire operation is rolled back.
+
+This ensures consistency across:
+- order status
+- inventory balance
+- inventory movement ledger
+
+
+
+## Pricing design
+
+At order creation time, pricing is controlled by the server.
+
+Client request payload contains:
+- `product_id`
+- `warehouse_id`
+- `qty`
+
+The server then:
+- loads `product.price`
+- stores it as `sales_order_item.unit_price`
+- calculates `line_amount`
+- calculates `order_total_amount`
+
+This design preserves:
+- pricing integrity
+- order history stability
+- snapshot pricing behavior
+
+Even if `product.price` changes later, existing order items keep the original captured price.
+
+
+
+## Why the workflow is split
+
+Order creation and inventory reservation are intentionally separated.
+
+This makes the lifecycle easier to:
+- understand
+- debug
+- test
+- explain in interviews
+
+It also mirrors real business workflows more clearly:
+
+- order exists
+- order is reserved
+- reservation may be released
+- reserved inventory may be shipped
+
+This explicit state transition model is easier to evolve than a single oversized "create-and-do-everything" endpoint.
+
+
+
+
+## End-to-end demo scenario
+
+A typical demo flow for the current system:
+
+1. Create warehouse
+2. Create category
+3. Create brand
+4. Create product
+5. Create inventory balance
+6. Create order
+7. Reserve order
+8. Inspect inventory balance changes
+9. Inspect inventory movement ledger
+10. Release order reservation (optional path)
+11. Ship order (happy path from `RESERVED`)
+
+This demonstrates:
+- master data setup
+- transactional order creation
+- secure server-side pricing
+- inventory reservation
+- inventory release
+- shipment
+- current-state vs history-table architecture
+- pessimistic locking on hot inventory rows
+
+
+
+
+## Current order statuses
+
+Current implementation uses the following order statuses:
+
+- `NEW`
+- `RESERVED`
+- `RELEASED`
+- `SHIPPED`
+
+At this stage, status values are stored as strings.
+A future improvement would be to apply the same discipline used in inventory:
+- typed enum in application code
+- database constraint on allowed status values
 

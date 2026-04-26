@@ -16,3 +16,10 @@ class InventoryReferenceType(StrEnum):
     ORDER = "ORDER"
     ORDER_ITEM = "ORDER_ITEM"
     SHIPMENT = "SHIPMENT"
+
+
+class OrderStatus(StrEnum):
+    NEW = "NEW"
+    RESERVED = "RESERVED"
+    RELEASED = "RELEASED"
+    SHIPPED = "SHIPPED"

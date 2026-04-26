@@ -18,6 +18,14 @@ from app.schemas.inventory_balance import (
     InventoryBalanceQuantityOperation,
     InventoryBalanceRead,
 )
+from app.services.inventory_service import (
+    get_inventory_balance_or_404,
+    get_inventory_balance_for_update_or_404,
+    reserve_inventory_balance,
+    release_inventory_balance,
+    receive_inventory_balance,
+    ship_inventory_balance,
+)
 
 router = APIRouter(tags=["inventory-balances"])
 
@@ -60,76 +68,6 @@ def to_inventory_balance_details_read(
         created_datetime=balance.created_datetime,
         updated_datetime=balance.updated_datetime,
     )
-
-
-def get_inventory_balance_or_404(
-    inventory_balance_id: int,
-    db: Session,
-) -> InventoryBalance:
-    balance = db.get(InventoryBalance, inventory_balance_id)
-    if balance is None:
-        raise HTTPException(status_code=404, detail="Inventory balance not found.")
-    return balance
-
-
-def get_inventory_balance_for_update_or_404(
-    inventory_balance_id: int,
-    db: Session,
-) -> InventoryBalance:
-    db.execute(text("SET LOCAL lock_timeout = '15s'"))
-
-    stmt = (
-        select(InventoryBalance)
-        .where(InventoryBalance.inventory_balance_id == inventory_balance_id)
-        .with_for_update()
-    )
-
-    try:
-        balance = db.execute(stmt).scalar_one_or_none()
-    except DBAPIError as exc:
-        db.rollback()
-
-        error_text = str(exc.orig).lower() if exc.orig else str(exc).lower()
-
-        if "lock timeout" in error_text:
-            raise HTTPException(
-                status_code=409,
-                detail="Resource busy, try again later.",
-            ) from exc
-
-        raise
-
-    if balance is None:
-        raise HTTPException(status_code=404, detail="Inventory balance not found.")
-
-    return balance
-
-
-def add_inventory_movement(
-    *,
-    db: Session,
-    warehouse_id: int,
-    product_id: int,
-    movement_type: str,
-    qty: int,
-    resulting_on_hand_qty: int,
-    resulting_reserved_qty: int,
-    reference_type: str | None = None,
-    reference_id: int | None = None,
-    comment_text: str | None = None,
-) -> None:
-    movement = InventoryMovement(
-        warehouse_id=warehouse_id,
-        product_id=product_id,
-        movement_type=movement_type,
-        qty=qty,
-        resulting_on_hand_qty=resulting_on_hand_qty,
-        resulting_reserved_qty=resulting_reserved_qty,
-        reference_type=reference_type,
-        reference_id=reference_id,
-        comment_text=comment_text,
-    )
-    db.add(movement)
 
 
 @router.post("/inventory-balances", response_model=InventoryBalanceRead)
@@ -324,23 +262,11 @@ def reserve_inventory(
 ):
     balance = get_inventory_balance_for_update_or_404(inventory_balance_id, db)
 
-    available_qty = balance.on_hand_qty - balance.reserved_qty
-    if available_qty < payload.qty:
-        raise HTTPException(
-            status_code=400,
-            detail="Not enough available inventory to reserve requested quantity.",
-        )
-
-    balance.reserved_qty += payload.qty
-
-    add_inventory_movement(
-        db=db,
-        warehouse_id=balance.warehouse_id,
-        product_id=balance.product_id,
-        movement_type=InventoryMovementType.RESERVE.value,
+    reserve_inventory_balance(
+        balance=balance,
         qty=payload.qty,
-        resulting_on_hand_qty=balance.on_hand_qty,
-        resulting_reserved_qty=balance.reserved_qty,
+        db=db,
+        movement_type=InventoryMovementType.RESERVE.value,
         reference_type=InventoryReferenceType.INVENTORY_BALANCE.value,
         reference_id=balance.inventory_balance_id,
         comment_text="Inventory reserved.",
@@ -366,22 +292,11 @@ def release_inventory(
 ):
     balance = get_inventory_balance_for_update_or_404(inventory_balance_id, db)
 
-    if balance.reserved_qty < payload.qty:
-        raise HTTPException(
-            status_code=400,
-            detail="Cannot release more than currently reserved quantity.",
-        )
-
-    balance.reserved_qty -= payload.qty
-
-    add_inventory_movement(
-        db=db,
-        warehouse_id=balance.warehouse_id,
-        product_id=balance.product_id,
-        movement_type=InventoryMovementType.RELEASE.value,
+    release_inventory_balance(
+        balance=balance,
         qty=payload.qty,
-        resulting_on_hand_qty=balance.on_hand_qty,
-        resulting_reserved_qty=balance.reserved_qty,
+        db=db,
+        movement_type=InventoryMovementType.RELEASE.value,
         reference_type=InventoryReferenceType.INVENTORY_BALANCE.value,
         reference_id=balance.inventory_balance_id,
         comment_text="Reserved inventory released.",
@@ -407,21 +322,16 @@ def receive_inventory(
 ):
     balance = get_inventory_balance_for_update_or_404(inventory_balance_id, db)
 
-    balance.on_hand_qty += payload.qty
-
-    add_inventory_movement(
-        db=db,
-        warehouse_id=balance.warehouse_id,
-        product_id=balance.product_id,
-        movement_type=InventoryMovementType.RECEIVE.value,
+    receive_inventory_balance(
+        balance=balance,
         qty=payload.qty,
-        resulting_on_hand_qty=balance.on_hand_qty,
-        resulting_reserved_qty=balance.reserved_qty,
+        db=db,
+        movement_type=InventoryMovementType.RECEIVE.value,
         reference_type=InventoryReferenceType.INVENTORY_BALANCE.value,
         reference_id=balance.inventory_balance_id,
         comment_text="Inventory received into stock.",
     )
-        
+
     try:
         db.commit()
     except IntegrityError as exc:
@@ -442,34 +352,16 @@ def ship_inventory(
 ):
     balance = get_inventory_balance_for_update_or_404(inventory_balance_id, db)
 
-    if balance.reserved_qty < payload.qty:
-        raise HTTPException(
-            status_code=400,
-            detail="Cannot ship more than currently reserved quantity.",
-        )
-
-    if balance.on_hand_qty < payload.qty:
-        raise HTTPException(
-            status_code=400,
-            detail="Cannot ship more than currently available on-hand quantity.",
-        )
-
-    balance.on_hand_qty -= payload.qty
-    balance.reserved_qty -= payload.qty
-
-    add_inventory_movement(
-        db=db,
-        warehouse_id=balance.warehouse_id,
-        product_id=balance.product_id,
-        movement_type=InventoryMovementType.SHIP.value,
+    ship_inventory_balance(
+        balance=balance,
         qty=payload.qty,
-        resulting_on_hand_qty=balance.on_hand_qty,
-        resulting_reserved_qty=balance.reserved_qty,
+        db=db,
+        movement_type=InventoryMovementType.SHIP.value,
         reference_type=InventoryReferenceType.INVENTORY_BALANCE.value,
         reference_id=balance.inventory_balance_id,
         comment_text="Reserved inventory shipped.",
     )
-    
+
     try:
         db.commit()
     except IntegrityError as exc:

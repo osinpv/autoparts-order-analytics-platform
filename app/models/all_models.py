@@ -4,3 +4,5 @@ import app.models.product_category
 import app.models.product_brand
 import app.models.inventory_balance
 import app.models.inventory_movement
+import app.models.sales_order
+import app.models.sales_order_item
