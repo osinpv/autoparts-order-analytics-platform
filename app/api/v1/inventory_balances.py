@@ -19,6 +19,7 @@ from app.schemas.inventory_balance import (
     InventoryBalanceRead,
 )
 from app.services.inventory_service import (
+    add_inventory_movement,
     get_inventory_balance_or_404,
     get_inventory_balance_for_update_or_404,
     reserve_inventory_balance,

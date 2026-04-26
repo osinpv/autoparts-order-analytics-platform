@@ -20,7 +20,33 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     op.execute("CREATE SCHEMA IF NOT EXISTS autoparts_owner")
-    op.execute("ALTER TABLE public.product SET SCHEMA autoparts_owner")
+
+    conn = op.get_bind()
+
+    product_exists_in_public = conn.execute(
+        sa.text("""
+            select exists (
+                select 1
+                from information_schema.tables
+                where table_schema = 'public'
+                  and table_name = 'product'
+            )
+        """)
+    ).scalar()
+
+    product_exists_in_owner = conn.execute(
+        sa.text("""
+            select exists (
+                select 1
+                from information_schema.tables
+                where table_schema = 'autoparts_owner'
+                  and table_name = 'product'
+            )
+        """)
+    ).scalar()
+
+    if product_exists_in_public and not product_exists_in_owner:
+        op.execute("ALTER TABLE public.product SET SCHEMA autoparts_owner")
 
 
 def downgrade() -> None:
