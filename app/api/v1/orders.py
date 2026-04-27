@@ -1,31 +1,25 @@
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select, text
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from datetime import datetime, timezone
 
 from app.api.v1.error_handlers import handle_integrity_error
 from app.core.db import get_db
-from app.models.product import Product
 from app.models.sales_order import SalesOrder
 from app.models.sales_order_item import SalesOrderItem
-from app.models.inventory_balance import InventoryBalance
-from app.models.inventory_movement import InventoryMovement
 from app.models.shipment import Shipment
-from app.models.payment import Payment
 from app.models.enums import (
     InventoryMovementType,
     InventoryReferenceType,
     OrderStatus,
     ShipmentStatus,
-    PaymentStatus,
 )
 from app.schemas.sales_order import (
     SalesOrderCreate,
     SalesOrderDetailsRead,
-    SalesOrderItemRead,
     SalesOrderRead,
 )
 from app.services.inventory_service import (
@@ -35,47 +29,19 @@ from app.services.inventory_service import (
     ship_inventory_balance,
     receive_inventory_balance,
 )
+from app.services.products_service import get_product_or_404
+from app.services.orders_service import (
+    get_order_or_404, 
+    get_order_items, 
+    to_sales_order_read, 
+    to_sales_order_item_read
+)
+from app.services.shipments_service import generate_shipment_number
+from app.services.payments_service import has_paid_payment_for_order
 
 
 router = APIRouter(tags=["orders"])
 
-
-def get_order_or_404(order_id: int, db: Session) -> SalesOrder:
-    order = db.get(SalesOrder, order_id)
-    if order is None:
-        raise HTTPException(status_code=404, detail="Order not found.")
-    return order
-
-def get_product_or_404(product_id: int, db: Session) -> Product:
-    product = db.get(Product, product_id)
-    if product is None:
-        raise HTTPException(status_code=404, detail=f"Product not found: product_id={product_id}.")
-    return product
-
-def get_order_items(order_id: int, db: Session) -> list[SalesOrderItem]:
-    stmt = (
-        select(SalesOrderItem)
-        .where(SalesOrderItem.order_id == order_id)
-        .order_by(SalesOrderItem.order_item_id)
-    )
-    return db.execute(stmt).scalars().all()
-
-def has_paid_payment_for_order(order_id: int, db: Session) -> bool:
-    stmt = select(Payment).where(
-        Payment.order_id == order_id,
-        Payment.payment_status == PaymentStatus.PAID.value,
-    )
-    return db.execute(stmt).scalars().first() is not None
-
-def generate_shipment_number(order_id: int) -> str:
-    return f"SHP-{order_id:06d}"
-
-def to_sales_order_read(order: SalesOrder) -> SalesOrderRead:
-    return SalesOrderRead.model_validate(order)
-
-
-def to_sales_order_item_read(item: SalesOrderItem) -> SalesOrderItemRead:
-    return SalesOrderItemRead.model_validate(item)
 
 
 @router.post("/orders", response_model=SalesOrderRead)

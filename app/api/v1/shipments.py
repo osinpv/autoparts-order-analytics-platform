@@ -7,20 +7,9 @@ from app.models.shipment import Shipment
 from app.models.sales_order import SalesOrder
 from app.models.enums import OrderStatus, ShipmentStatus
 from app.schemas.shipment import ShipmentRead, ShipmentUpdate
+from app.services.shipments_service import get_shipment_or_404, to_shipment_read
 
 router = APIRouter(tags=["shipments"])
-
-
-def get_shipment_or_404(shipment_id: int, db: Session) -> Shipment:
-    shipment = db.get(Shipment, shipment_id)
-    if shipment is None:
-        raise HTTPException(status_code=404, detail="Shipment not found.")
-    return shipment
-
-
-def to_shipment_read(shipment: Shipment) -> ShipmentRead:
-    return ShipmentRead.model_validate(shipment)
-
 
 @router.get("/shipments", response_model=list[ShipmentRead])
 def get_shipments(

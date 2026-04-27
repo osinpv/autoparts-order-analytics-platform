@@ -11,39 +11,15 @@ from app.models.enums import OrderStatus, PaymentStatus
 from app.models.payment import Payment
 from app.models.sales_order import SalesOrder
 from app.schemas.payment import PaymentCreate, PaymentRead
+from app.services.orders_service import get_order_or_404
+from app.services.payments_service import (
+    get_payment_or_404, 
+    get_payments_by_order_id,
+    to_payment_read,
+    generate_payment_number
+)
 
 router = APIRouter(tags=["payments"])
-
-
-def get_payment_or_404(payment_id: int, db: Session) -> Payment:
-    payment = db.get(Payment, payment_id)
-    if payment is None:
-        raise HTTPException(status_code=404, detail="Payment not found.")
-    return payment
-
-
-def get_order_or_404(order_id: int, db: Session) -> SalesOrder:
-    order = db.get(SalesOrder, order_id)
-    if order is None:
-        raise HTTPException(status_code=404, detail=f"Order not found: order_id={order_id}.")
-    return order
-
-
-def get_payments_by_order_id(order_id: int, db: Session) -> list[Payment]:
-    stmt = (
-        select(Payment)
-        .where(Payment.order_id == order_id)
-        .order_by(Payment.payment_id)
-    )
-    return db.execute(stmt).scalars().all()
-
-
-def to_payment_read(payment: Payment) -> PaymentRead:
-    return PaymentRead.model_validate(payment)
-
-
-def generate_payment_number(order_id: int, attempt_no: int) -> str:
-    return f"PAY-{order_id:06d}-{attempt_no:02d}"
 
 
 @router.get("/payments", response_model=list[PaymentRead])

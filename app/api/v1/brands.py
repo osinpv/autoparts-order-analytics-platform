@@ -7,15 +7,10 @@ from app.api.v1.error_handlers import handle_integrity_error
 from app.core.db import get_db
 from app.models.product_brand import ProductBrand
 from app.schemas.product_brand import ProductBrandCreate, ProductBrandRead
+from app.services.brands_service import get_brand_or_404
 
 router = APIRouter(tags=["brands"])
 
-
-def get_brand_or_404(brand_id: int, db: Session) -> ProductBrand:
-    brand = db.get(ProductBrand, brand_id)
-    if brand is None:
-        raise HTTPException(status_code=404, detail="Brand not found.")
-    return brand
 
 
 @router.post("/brands", response_model=ProductBrandRead)

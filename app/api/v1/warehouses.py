@@ -7,15 +7,9 @@ from app.api.v1.error_handlers import handle_integrity_error
 from app.core.db import get_db
 from app.models.warehouse import Warehouse
 from app.schemas.warehouse import WarehouseCreate, WarehouseRead
+from app.services.warehouses_service import get_warehouse_or_404
 
 router = APIRouter(tags=["warehouses"])
-
-
-def get_warehouse_or_404(warehouse_id: int, db: Session) -> Warehouse:
-    warehouse = db.get(Warehouse, warehouse_id)
-    if warehouse is None:
-        raise HTTPException(status_code=404, detail="Warehouse not found.")
-    return warehouse
 
 
 @router.post("/warehouses", response_model=WarehouseRead)

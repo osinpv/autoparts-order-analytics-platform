@@ -9,16 +9,9 @@ from app.models.product import Product
 from app.models.product_brand import ProductBrand
 from app.models.product_category import ProductCategory
 from app.schemas.product import ProductCreate, ProductDetailsRead, ProductRead
-
+from app.services.products_service import get_product_or_404
 
 router = APIRouter(tags=["products"])
-
-
-def get_product_or_404(product_id: int, db: Session) -> Product:
-    product = db.get(Product, product_id)
-    if product is None:
-        raise HTTPException(status_code=404, detail="Product not found.")
-    return product
 
 
 @router.post("/products", response_model=ProductRead)

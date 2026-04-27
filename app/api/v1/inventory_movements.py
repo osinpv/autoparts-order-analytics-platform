@@ -10,52 +10,14 @@ from app.schemas.inventory_movement import (
     InventoryMovementDetailsRead,
     InventoryMovementRead,
 )
+from app.services.inventory_service import (
+    to_inventory_movement_details_read,
+    to_inventory_movement_read
+)
 
 router = APIRouter(tags=["inventory-movements"])
 
 
-def to_inventory_movement_read(
-    movement: InventoryMovement,
-) -> InventoryMovementRead:
-    return InventoryMovementRead(
-        inventory_movement_id=movement.inventory_movement_id,
-        warehouse_id=movement.warehouse_id,
-        product_id=movement.product_id,
-        movement_type=movement.movement_type,
-        qty=movement.qty,
-        resulting_on_hand_qty=movement.resulting_on_hand_qty,
-        resulting_reserved_qty=movement.resulting_reserved_qty,
-        resulting_available_qty=movement.resulting_on_hand_qty - movement.resulting_reserved_qty,
-        reference_type=movement.reference_type,
-        reference_id=movement.reference_id,
-        comment_text=movement.comment_text,
-        created_datetime=movement.created_datetime,
-    )
-
-
-def to_inventory_movement_details_read(
-    movement: InventoryMovement,
-    warehouse: Warehouse,
-    product: Product,
-) -> InventoryMovementDetailsRead:
-    return InventoryMovementDetailsRead(
-        inventory_movement_id=movement.inventory_movement_id,
-        warehouse_id=warehouse.warehouse_id,
-        warehouse_code=warehouse.warehouse_code,
-        warehouse_name=warehouse.warehouse_name,
-        product_id=product.product_id,
-        sku=product.sku,
-        product_name=product.product_name,
-        movement_type=movement.movement_type,
-        qty=movement.qty,
-        resulting_on_hand_qty=movement.resulting_on_hand_qty,
-        resulting_reserved_qty=movement.resulting_reserved_qty,
-        resulting_available_qty=movement.resulting_on_hand_qty - movement.resulting_reserved_qty,
-        reference_type=movement.reference_type,
-        reference_id=movement.reference_id,
-        comment_text=movement.comment_text,
-        created_datetime=movement.created_datetime,
-    )
 
 
 def get_inventory_movement_or_404(

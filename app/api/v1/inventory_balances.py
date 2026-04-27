@@ -26,49 +26,11 @@ from app.services.inventory_service import (
     release_inventory_balance,
     receive_inventory_balance,
     ship_inventory_balance,
+    to_inventory_balance_read,
+    to_inventory_balance_details_read,
 )
 
 router = APIRouter(tags=["inventory-balances"])
-
-
-def to_inventory_balance_read(balance: InventoryBalance) -> InventoryBalanceRead:
-    return InventoryBalanceRead(
-        inventory_balance_id=balance.inventory_balance_id,
-        warehouse_id=balance.warehouse_id,
-        product_id=balance.product_id,
-        on_hand_qty=balance.on_hand_qty,
-        reserved_qty=balance.reserved_qty,
-        available_qty=balance.on_hand_qty - balance.reserved_qty,
-        created_datetime=balance.created_datetime,
-        updated_datetime=balance.updated_datetime,
-    )
-
-
-def to_inventory_balance_details_read(
-    balance: InventoryBalance,
-    warehouse: Warehouse,
-    product: Product,
-    category: ProductCategory | None,
-    brand: ProductBrand | None,
-) -> InventoryBalanceDetailsRead:
-    return InventoryBalanceDetailsRead(
-        inventory_balance_id=balance.inventory_balance_id,
-        warehouse_id=warehouse.warehouse_id,
-        warehouse_code=warehouse.warehouse_code,
-        warehouse_name=warehouse.warehouse_name,
-        product_id=product.product_id,
-        sku=product.sku,
-        product_name=product.product_name,
-        category_id=product.category_id,
-        category_name=category.category_name if category else None,
-        brand_id=product.brand_id,
-        brand_name=brand.brand_name if brand else None,
-        on_hand_qty=balance.on_hand_qty,
-        reserved_qty=balance.reserved_qty,
-        available_qty=balance.on_hand_qty - balance.reserved_qty,
-        created_datetime=balance.created_datetime,
-        updated_datetime=balance.updated_datetime,
-    )
 
 
 @router.post("/inventory-balances", response_model=InventoryBalanceRead)

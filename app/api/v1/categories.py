@@ -7,15 +7,9 @@ from app.api.v1.error_handlers import handle_integrity_error
 from app.core.db import get_db
 from app.models.product_category import ProductCategory
 from app.schemas.product_category import ProductCategoryCreate, ProductCategoryRead
+from app.services.categories_service import get_category_or_404
 
 router = APIRouter(tags=["categories"])
-
-
-def get_category_or_404(category_id: int, db: Session) -> ProductCategory:
-    category = db.get(ProductCategory, category_id)
-    if category is None:
-        raise HTTPException(status_code=404, detail="Category not found.")
-    return category
 
 
 @router.post("/categories", response_model=ProductCategoryRead)
