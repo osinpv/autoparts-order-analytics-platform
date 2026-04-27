@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from datetime import datetime, timezone
 
 from app.api.v1.error_handlers import handle_integrity_error
 from app.core.db import get_db
@@ -12,10 +13,14 @@ from app.models.sales_order import SalesOrder
 from app.models.sales_order_item import SalesOrderItem
 from app.models.inventory_balance import InventoryBalance
 from app.models.inventory_movement import InventoryMovement
+from app.models.shipment import Shipment
+from app.models.payment import Payment
 from app.models.enums import (
     InventoryMovementType,
     InventoryReferenceType,
     OrderStatus,
+    ShipmentStatus,
+    PaymentStatus,
 )
 from app.schemas.sales_order import (
     SalesOrderCreate,
@@ -28,6 +33,7 @@ from app.services.inventory_service import (
     reserve_inventory_balance,
     release_inventory_balance,
     ship_inventory_balance,
+    receive_inventory_balance,
 )
 
 
@@ -54,6 +60,15 @@ def get_order_items(order_id: int, db: Session) -> list[SalesOrderItem]:
     )
     return db.execute(stmt).scalars().all()
 
+def has_paid_payment_for_order(order_id: int, db: Session) -> bool:
+    stmt = select(Payment).where(
+        Payment.order_id == order_id,
+        Payment.payment_status == PaymentStatus.PAID.value,
+    )
+    return db.execute(stmt).scalars().first() is not None
+
+def generate_shipment_number(order_id: int) -> str:
+    return f"SHP-{order_id:06d}"
 
 def to_sales_order_read(order: SalesOrder) -> SalesOrderRead:
     return SalesOrderRead.model_validate(order)
@@ -245,6 +260,12 @@ def ship_order(order_id: int, db: Session = Depends(get_db)):
             detail="Only orders in RESERVED status can be shipped.",
         )
 
+    if not has_paid_payment_for_order(order.order_id, db):
+        raise HTTPException(
+            status_code=400,
+            detail="Order must have a PAID payment before shipment.",
+        )
+
     items = get_order_items(order_id, db)
 
     if not items:
@@ -269,8 +290,138 @@ def ship_order(order_id: int, db: Session = Depends(get_db)):
             reference_id=item.order_item_id,
             comment_text=f"Inventory shipped for order {order.order_number}.",
         )
-        
+
+    shipment = Shipment(
+        shipment_number=generate_shipment_number(order.order_id),
+        order_id=order.order_id,
+        shipment_status=ShipmentStatus.SHIPPED.value,
+        carrier_name=None,
+        tracking_number=None,
+        shipped_datetime=datetime.now(timezone.utc),
+    )
+    db.add(shipment)
+
     order.order_status = OrderStatus.SHIPPED.value
+
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        handle_integrity_error(db, exc)
+
+    db.refresh(order)
+    return to_sales_order_read(order)
+
+
+@router.post("/orders/{order_id}/cancel", response_model=SalesOrderRead)
+def cancel_order(order_id: int, db: Session = Depends(get_db)):
+    order = get_order_or_404(order_id, db)
+
+    if order.order_status == OrderStatus.SHIPPED.value:
+        raise HTTPException(
+            status_code=400,
+            detail="Shipped orders cannot be cancelled.",
+        )
+
+    if order.order_status == OrderStatus.CANCELLED.value:
+        raise HTTPException(
+            status_code=400,
+            detail="Order is already cancelled.",
+        )
+
+    if order.order_status == OrderStatus.NEW.value:
+        order.order_status = OrderStatus.CANCELLED.value
+
+    elif order.order_status == OrderStatus.RELEASED.value:
+        order.order_status = OrderStatus.CANCELLED.value
+
+    elif order.order_status == OrderStatus.RESERVED.value:
+        items = get_order_items(order_id, db)
+
+        if not items:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot cancel a reserved order without items.",
+            )
+
+        for item in items:
+            balance = get_inventory_balance_for_update_by_business_key_or_404(
+                warehouse_id=item.warehouse_id,
+                product_id=item.product_id,
+                db=db,
+            )
+
+            release_inventory_balance(
+                balance=balance,
+                qty=item.qty,
+                db=db,
+                movement_type=InventoryMovementType.RELEASE.value,
+                reference_type=InventoryReferenceType.ORDER_ITEM.value,
+                reference_id=item.order_item_id,
+                comment_text=f"Inventory released due to cancellation of order {order.order_number}.",
+            )
+
+        order.order_status = OrderStatus.CANCELLED.value
+
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Order status {order.order_status} is not supported for cancellation.",
+        )
+
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        handle_integrity_error(db, exc)
+
+    db.refresh(order)
+    return to_sales_order_read(order)
+
+
+@router.post("/orders/{order_id}/return", response_model=SalesOrderRead)
+def return_order(order_id: int, db: Session = Depends(get_db)):
+    order = get_order_or_404(order_id, db)
+
+    if order.order_status == OrderStatus.RETURNED.value:
+        raise HTTPException(
+            status_code=400,
+            detail="Order is already returned.",
+        )
+
+    if order.order_status not in {
+        OrderStatus.SHIPPED.value,
+        OrderStatus.DELIVERED.value,
+    }:
+        raise HTTPException(
+            status_code=400,
+            detail="Only shipped or delivered orders can be returned.",
+        )
+
+    items = get_order_items(order_id, db)
+
+    if not items:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot return an order without items.",
+        )
+
+    for item in items:
+        balance = get_inventory_balance_for_update_by_business_key_or_404(
+            warehouse_id=item.warehouse_id,
+            product_id=item.product_id,
+            db=db,
+        )
+
+        receive_inventory_balance(
+            balance=balance,
+            qty=item.qty,
+            db=db,
+            movement_type=InventoryMovementType.RETURN.value,
+            reference_type=InventoryReferenceType.ORDER_ITEM.value,
+            reference_id=item.order_item_id,
+            comment_text=f"Inventory returned from shipped order {order.order_number}.",
+        )
+
+    order.order_status = OrderStatus.RETURNED.value
 
     try:
         db.commit()

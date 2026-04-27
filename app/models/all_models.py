@@ -6,3 +6,5 @@ import app.models.inventory_balance
 import app.models.inventory_movement
 import app.models.sales_order
 import app.models.sales_order_item
+import app.models.shipment
+import app.models.payment

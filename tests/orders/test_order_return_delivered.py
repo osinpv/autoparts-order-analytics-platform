@@ -1,20 +1,20 @@
 from sqlalchemy import text
 
-from tests.helpers import create_order_setup, reserve_order, ship_order
+from tests.helpers import create_and_complete_payment, create_order_setup, reserve_order, ship_order
 
 
-def test_ship_order_success(client, db_session):
+def test_return_delivered_order_success(client, db_session):
     setup = create_order_setup(
         client,
-        sku="BRK-007",
-        product_name="Performance Brake Pads",
-        price="109.99",
-        warehouse_code="TPA2",
-        warehouse_name="Tampa Overflow Warehouse",
-        region="Florida West",
+        sku="BRK-028",
+        product_name="Return Delivered Pads",
+        price="111.99",
+        warehouse_code="RETDLV",
+        warehouse_name="Return Delivered Warehouse",
+        region="Florida",
         on_hand_qty=10,
         reserved_qty=0,
-        order_number="SO-300004",
+        order_number="SO-700004",
         customer_email="john@example.com",
         order_qty=2,
     )
@@ -25,19 +25,27 @@ def test_ship_order_success(client, db_session):
     reserve_payload = reserve_order(client, order["order_id"])
     assert reserve_payload["order_status"] == "RESERVED"
 
-    create_payment_response = client.post(
-        f"/orders/{order['order_id']}/payments",
-        json={"payment_method": "CARD"},
-    )
-    assert create_payment_response.status_code == 200
-    payment_id = create_payment_response.json()["payment_id"]
-
-    complete_payment_response = client.post(f"/payments/{payment_id}/complete")
-    assert complete_payment_response.status_code == 200
-    assert complete_payment_response.json()["payment_status"] == "PAID"
-
+    create_and_complete_payment(client, order["order_id"])
     ship_payload = ship_order(client, order["order_id"])
     assert ship_payload["order_status"] == "SHIPPED"
+
+    shipments_response = client.get(f"/shipments?order_id={order['order_id']}")
+    assert shipments_response.status_code == 200
+    shipments = shipments_response.json()
+    assert len(shipments) == 1
+
+    shipment_id = shipments[0]["shipment_id"]
+
+    deliver_response = client.post(f"/shipments/{shipment_id}/deliver")
+    assert deliver_response.status_code == 200
+    assert deliver_response.json()["shipment_status"] == "DELIVERED"
+
+    return_response = client.post(f"/orders/{order['order_id']}/return")
+    assert return_response.status_code == 200
+
+    payload = return_response.json()
+    assert payload["order_id"] == order["order_id"]
+    assert payload["order_status"] == "RETURNED"
 
     balance_row = db_session.execute(
         text("""
@@ -49,7 +57,7 @@ def test_ship_order_success(client, db_session):
     ).fetchone()
 
     assert balance_row is not None
-    assert balance_row[0] == 8
+    assert balance_row[0] == 10
     assert balance_row[1] == 0
 
     order_row = db_session.execute(
@@ -62,21 +70,7 @@ def test_ship_order_success(client, db_session):
     ).fetchone()
 
     assert order_row is not None
-    assert order_row[0] == "SHIPPED"
-
-    shipment_row = db_session.execute(
-        text("""
-            select shipment_number, order_id, shipment_status
-            from autoparts_owner.shipment
-            where order_id = :order_id
-        """),
-        {"order_id": order["order_id"]},
-    ).fetchone()
-
-    assert shipment_row is not None
-    assert shipment_row[0] == f"SHP-{order['order_id']:06d}"
-    assert shipment_row[1] == order["order_id"]
-    assert shipment_row[2] == "SHIPPED"
+    assert order_row[0] == "RETURNED"
 
     movement_rows = db_session.execute(
         text("""
@@ -86,7 +80,7 @@ def test_ship_order_success(client, db_session):
         """)
     ).fetchall()
 
-    assert len(movement_rows) == 3
+    assert len(movement_rows) == 4
 
     assert movement_rows[0][0] == "INITIAL_LOAD"
     assert movement_rows[0][1] == 10
@@ -105,3 +99,9 @@ def test_ship_order_success(client, db_session):
     assert movement_rows[2][2] == "ORDER_ITEM"
     assert movement_rows[2][3] == 8
     assert movement_rows[2][4] == 0
+
+    assert movement_rows[3][0] == "RETURN"
+    assert movement_rows[3][1] == 2
+    assert movement_rows[3][2] == "ORDER_ITEM"
+    assert movement_rows[3][3] == 10
+    assert movement_rows[3][4] == 0

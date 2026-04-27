@@ -11,7 +11,7 @@ class SalesOrder(TimestampMixin, Base):
     __tablename__ = "sales_order"
     __table_args__ = (
         CheckConstraint(
-            "order_status in ('NEW', 'RESERVED', 'RELEASED', 'SHIPPED')",
+            "order_status in ('NEW', 'RESERVED', 'RELEASED', 'SHIPPED', 'CANCELLED', 'RETURNED', 'DELIVERED')",
             name="ck_sales_order_status_allowed",
         ),
         {"schema": "autoparts_owner"},

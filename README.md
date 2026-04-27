@@ -1,354 +1,354 @@
-# AutoParts Order & Analytics Platform
+# Autoparts Order Analytics Platform
 
-A project focused on designing a transactional retail backend with strong database-oriented architecture.
+A backend project for managing the lifecycle of automotive parts orders, inventory, shipments, and payments.
 
-Current scope includes:
-- product and warehouse master data
-- inventory balance management
-- inventory movement ledger
-- transactional inventory operations
-- concurrency control patterns
-- API-first implementation with FastAPI + PostgreSQL
+This project is built as a realistic transactional system rather than a simple CRUD demo. It models how an order moves through inventory reservation, payment processing, shipment, delivery, cancellation, and return flows, while preserving auditability through an inventory movement ledger.
 
+---
 
+## Project goals
 
-## Implemented features
+The main goals of this project are:
 
-Current implementation covers the core inventory foundation of a transactional retail platform:
+- model realistic order and inventory workflows
+- separate operational concerns such as inventory, shipment, and payment
+- enforce business rules in the API and database
+- keep schema evolution reproducible through Alembic migrations
+- support automated integration tests against PostgreSQL
+- document architectural trade-offs explicitly
 
-- Product domain:
-  - product categories
-  - product brands
-  - products
-  - warehouses
+---
 
-- Inventory domain:
-  - current inventory balance per `(warehouse, product)`
-  - inventory reserve / release operations
-  - inventory receive / ship operations
-  - inventory movement ledger (history of all inventory changes)
+## Tech stack
 
-- API capabilities:
-  - create and list categories, brands, products, warehouses
-  - get entities by id
-  - enriched details endpoints for products and inventory balances
-  - filtered inventory search by:
-    - warehouse
-    - product
-    - SKU
-    - category
-    - brand
+- **Python**
+- **FastAPI**
+- **SQLAlchemy ORM**
+- **Alembic**
+- **PostgreSQL**
+- **pytest**
 
-- Data integrity:
-  - unique constraints
-  - foreign keys
-  - check constraints for inventory quantities
-  - typed movement and reference values with database validation
+---
 
-- Concurrency controls:
-  - optimistic versioning on `inventory_balance`
-  - pessimistic row locking for hot inventory mutation paths
-  - lock timeout handling for busy inventory rows
+## Domain coverage
 
+The project currently includes the following main domains.
 
+### Catalog / master data
+- product category
+- product brand
+- product
+- warehouse
 
-## Inventory architecture
+### Inventory
+- `inventory_balance` — current stock state per `(warehouse_id, product_id)`
+- `inventory_movement` — immutable ledger of inventory changes
 
-The inventory module is intentionally split into two layers:
+### Orders
+- `sales_order`
+- `sales_order_item`
 
-### 1. `inventory_balance`
-Stores the **current state** of inventory for a single `(warehouse, product)` pair.
+### Shipments
+- `shipment`
 
-Fields include:
+### Payments
+- `payment`
+
+---
+
+## Core entities
+
+### Product
+Represents a sellable catalog item.
+
+### Warehouse
+Represents a storage location.
+
+### Inventory balance
+Represents the current stock snapshot for a specific product in a specific warehouse.
+
+Tracks:
 - `on_hand_qty`
 - `reserved_qty`
 
-`available_qty` is **not stored physically** in this table.
-It is derived as:
+`available_qty` is derived as:
 
-`available_qty = on_hand_qty - reserved_qty`
+```text
+available_qty = on_hand_qty - reserved_qty
+```
 
-This keeps the current-state table cleaner and reduces the risk of storing inconsistent derived data.
+### Inventory movement
+Represents an immutable ledger record for stock state transitions.
 
-### 2. `inventory_movement`
-Stores the **history of inventory changes**.
+The ledger stores:
+- `movement_type`
+- `qty`
+- `reference_type`
+- `reference_id`
+- `resulting_on_hand_qty`
+- `resulting_reserved_qty`
 
-Each movement records:
-- movement type
-- quantity
-- business reference type / reference id
-- resulting inventory snapshot after the operation:
-  - `resulting_on_hand_qty`
-  - `resulting_reserved_qty`
-  - `resulting_available_qty` is calculated in the API layer
+This allows the system to answer both:
+- what changed
+- what the stock state became after the change
 
-This design allows the system to answer both questions:
+### Sales order
+Represents a customer order with one or more order items.
 
-- **What is the current state?** → `inventory_balance`
-- **How did the system get there?** → `inventory_movement`
+### Shipment
+Represents the shipment record created when an order is shipped.
 
-This is a common pattern in transactional systems where current-state reads must be fast, but auditability and historical reconstruction are also required.
+Tracks:
+- shipment number
+- order reference
+- shipment status
+- carrier name
+- tracking number
+- shipped timestamp
 
+### Payment
+Represents a payment attempt for an order.
 
+Tracks:
+- payment number
+- order reference
+- payment status
+- payment method
+- amount
+- paid timestamp
 
-## Inventory operations
+The design now supports **multiple payment attempts** for the same order.
 
-The following business operations are currently implemented:
+---
 
-- `reserve`
-- `release`
-- `receive`
-- `ship`
+## Current business workflows
 
-### Reserve
-Increases `reserved_qty` if enough inventory is available.
+### 1. Inventory reserve
+A reserved order reduces available stock by increasing `reserved_qty`.
 
-### Release
-Decreases `reserved_qty` if sufficient quantity is currently reserved.
+Flow:
+1. order exists
+2. inventory is reserved
+3. ledger gets `RESERVE`
 
-### Receive
-Increases `on_hand_qty` when inventory is received into stock.
+### 2. Inventory release
+Reserved stock can be released back into availability.
 
-### Ship
-Decreases both:
-- `on_hand_qty`
-- `reserved_qty`
+Flow:
+1. order or manual process triggers release
+2. `reserved_qty` decreases
+3. ledger gets `RELEASE`
 
-This models shipment of already reserved inventory.
+### 3. Shipping
+Shipping is allowed only if:
+- the order is in `RESERVED`
+- the order has at least one payment in `PAID` status
 
-Every successful inventory mutation also writes a ledger entry into `inventory_movement` within the same transaction.
+Flow:
+1. validate order status
+2. validate payment state
+3. decrease stock from reserved inventory
+4. create shipment record
+5. set order status to `SHIPPED`
+6. ledger gets `SHIP`
 
+### 4. Delivery
+Delivery is modeled on the shipment entity.
 
+Flow:
+1. shipment is in `SHIPPED`
+2. shipment becomes `DELIVERED`
+3. related order becomes `DELIVERED`
+
+### 5. Cancellation
+Cancellation is modeled at the order level.
+
+Rules:
+- `NEW` order can be cancelled directly
+- `RESERVED` order can be cancelled, which first releases reserved inventory
+- `RELEASED` order can be cancelled
+- `SHIPPED` order cannot be cancelled
+
+### 6. Return
+Return is currently modeled as a **full-order return**.
+
+Rules:
+- return is allowed for `SHIPPED` or `DELIVERED` orders
+- return restores inventory
+- ledger gets `RETURN`
+- order becomes `RETURNED`
+
+Current simplification:
+- returns are full-order only
+- partial return lines are not modeled yet
+
+### 7. Payment creation
+Payments are created as nested resources under orders:
+
+- `POST /orders/{order_id}/payments`
+
+Rules:
+- payment can only be created for orders in:
+  - `NEW`
+  - `RESERVED`
+  - `RELEASED`
+- payment is blocked if there is already at least one:
+  - `PENDING`
+  - `PAID`
+  payment for that order
+- payment can be retried if previous payments are only:
+  - `FAILED`
+  - `REFUNDED`
+
+### 8. Payment completion / failure
+Payment lifecycle is independent from order fulfillment status.
+
+Flows:
+- `POST /payments/{payment_id}/complete`
+- `POST /payments/{payment_id}/fail`
+
+Rules:
+- only `PENDING` payments can be completed
+- only `PENDING` payments can be failed
+
+---
+
+## Status models
+
+### Order status
+Current order statuses:
+
+- `NEW`
+- `RESERVED`
+- `RELEASED`
+- `SHIPPED`
+- `DELIVERED`
+- `CANCELLED`
+- `RETURNED`
+
+### Shipment status
+Current shipment statuses:
+
+- `CREATED`
+- `SHIPPED`
+- `DELIVERED`
+- `RETURNED`
+
+Note:
+`DELIVERED` is currently treated as the terminal shipment state in the practical business interpretation of this project.
+
+### Payment status
+Current payment statuses:
+
+- `PENDING`
+- `PAID`
+- `FAILED`
+- `REFUNDED`
+
+---
+
+## Important business rules
+
+### Shipping requires payment
+An order cannot be shipped unless at least one payment for that order is in `PAID` status.
+
+### Payment attempts
+The system supports multiple payment attempts per order.
+
+Rules:
+- cannot create a new payment if at least one existing payment is `PENDING`
+- cannot create a new payment if at least one existing payment is `PAID`
+- can create a new payment if all previous payments are only `FAILED` or `REFUNDED`
+
+### Delivered shipment updates order
+Delivering a shipment also updates the related order to `DELIVERED`.
+
+### Shipment is separate from return
+Shipment and return are intentionally treated as different concepts:
+- shipment describes delivery execution
+- return describes product coming back into inventory
+- shipment is not reused as the return entity
+
+### Inventory ledger stores resulting snapshots
+Ledger rows store resulting stock snapshots so historical state reconstruction is simpler and query-friendly.
+
+---
+
+## Architectural decisions
+
+### 1. Inventory ledger uses resulting snapshots
+Instead of storing only deltas, each movement stores:
+- resulting on-hand
+- resulting reserved
+
+This makes audit and historical reasoning much easier.
+
+### 2. `available_qty` is derived, not stored
+`available_qty` is intentionally not persisted in the database.
+It is derived from:
+
+```text
+on_hand_qty - reserved_qty
+```
+
+This avoids redundant state.
+
+### 3. Payment is modeled as a separate domain
+Payment status is not currently merged into `order_status`.
+This keeps money lifecycle separate from fulfillment lifecycle.
+
+### 4. Shipment is created through order shipping flow
+A shipment is currently created as a side effect of `ship_order(...)`.
+Shipment has its own read/update lifecycle after creation.
+
+### 5. PostgreSQL is the source of truth for concurrency behavior
+The project intentionally uses PostgreSQL-specific transaction and locking features, including pessimistic locking with timeout behavior.
+
+---
 
 ## Concurrency strategy
 
-Two concurrency control techniques are intentionally demonstrated in this project:
-
-### Optimistic locking
-`inventory_balance` includes a `version_num` column and SQLAlchemy versioning support.
-
-This protects against lost updates and demonstrates an optimistic concurrency pattern.
-
 ### Pessimistic locking
-For hot inventory mutation paths (`reserve`, `release`, `receive`, `ship`), the implementation uses:
+Inventory rows are locked during stock-sensitive operations using row-level locking.
 
-`SELECT ... FOR UPDATE`
-
-This was chosen because inventory rows are contention-prone and business-critical.
-
-With pessimistic locking:
-- concurrent updates are serialized
-- each transaction checks the most current state
-- oversell risk is reduced
-- clients get a business result based on actual latest inventory
+This protects against lost updates and overselling scenarios in concurrent workflows.
 
 ### Lock timeout
-Hot-path locking also uses a lock timeout.
-If a row remains locked for too long, the API returns a controlled error such as:
+The project includes support for lock timeout handling so blocked operations can fail gracefully with a user-facing message such as:
 
-`Resource busy, try again later.`
+- `Resource busy, try again later.`
 
-This avoids indefinite waiting and makes concurrency behavior more predictable for API consumers.
+### Optimistic versioning
+A version column is also present in inventory balance design discussions and implementation flow, but the main stock-sensitive workflow currently relies on pessimistic locking for stronger safety under hot-row contention.
 
+---
 
+## API overview
 
-## Data integrity rules
+### Orders
+Examples of order-related endpoints:
 
-### `inventory_balance`
-Database constraints enforce:
-- `on_hand_qty >= 0`
-- `reserved_qty >= 0`
-- `reserved_qty <= on_hand_qty`
+- `POST /orders`
+- `POST /orders/{order_id}/reserve`
+- `POST /orders/{order_id}/release`
+- `POST /orders/{order_id}/ship`
+- `POST /orders/{order_id}/cancel`
+- `POST /orders/{order_id}/return`
 
-### `inventory_movement`
-Database constraints enforce:
-- `qty > 0`
-- `resulting_on_hand_qty >= 0`
-- `resulting_reserved_qty >= 0`
-- `resulting_reserved_qty <= resulting_on_hand_qty`
+### Shipments
+- `GET /shipments`
+- `GET /shipments/{shipment_id}`
+- `PATCH /shipments/{shipment_id}`
+- `POST /shipments/{shipment_id}/deliver`
 
-Allowed movement types and reference types are also validated at both:
-- application level
-- database level
+### Payments
+- `GET /payments`
+- `GET /payments/{payment_id}`
+- `POST /orders/{order_id}/payments`
+- `POST /payments/{payment_id}/complete`
+- `POST /payments/{payment_id}/fail`
 
-
-
-## Why this design
-
-This implementation intentionally favors clarity of transactional behavior over excessive abstraction.
-
-Key design choices:
-- `available_qty` is derived, not stored in `inventory_balance`
-- ledger stores resulting state snapshots to simplify historical investigation
-- hot inventory mutations use pessimistic locking
-- optimistic versioning remains in place as an additional concurrency example
-- reference types are typed and validated to prepare the model for future order / shipment integration
-
-
-## Order workflow
-
-The project currently implements a minimal transactional order lifecycle:
-
-- `NEW`
-- `RESERVED`
-- `RELEASED`
-- `SHIPPED`
-
-### `POST /orders`
-Creates an order header and order items.
-
-Important design choice:
-- client does **not** provide item price
-- server loads the current product price from `product.price`
-- `sales_order_item.unit_price` stores the price snapshot at the time of order creation
-- `line_amount` and `order_total_amount` are calculated server-side
-
-This prevents clients from manipulating pricing in the order request.
-
-
-
-## Order and inventory integration
-
-Inventory is not reserved automatically during order creation.
-
-Instead, the workflow is intentionally split into explicit business actions:
-
-### `POST /orders/{order_id}/reserve`
-- allowed only for orders in `NEW` status
-- locks affected inventory rows using pessimistic locking
-- validates available quantity for each order item
-- increases `reserved_qty`
-- writes `RESERVE` entries into `inventory_movement`
-- updates order status to `RESERVED`
-
-### `POST /orders/{order_id}/release`
-- allowed only for orders in `RESERVED` status
-- decreases `reserved_qty`
-- writes `RELEASE` entries into `inventory_movement`
-- updates order status to `RELEASED`
-
-### `POST /orders/{order_id}/ship`
-- allowed only for orders in `RESERVED` status
-- decreases both:
-  - `on_hand_qty`
-  - `reserved_qty`
-- writes `SHIP` entries into `inventory_movement`
-- updates order status to `SHIPPED`
-
-
-
-## Transactional guarantees
-
-Order reservation and shipment flows are implemented as multi-row transactional operations.
-
-For each order item, the application:
-
-- locates the corresponding inventory balance by `(warehouse_id, product_id)`
-- locks the row with `SELECT ... FOR UPDATE`
-- validates inventory state
-- updates current balance
-- writes ledger history
-
-If any item fails validation, the entire operation is rolled back.
-
-This ensures consistency across:
-- order status
-- inventory balance
-- inventory movement ledger
-
-
-
-## Pricing design
-
-At order creation time, pricing is controlled by the server.
-
-Client request payload contains:
-- `product_id`
-- `warehouse_id`
-- `qty`
-
-The server then:
-- loads `product.price`
-- stores it as `sales_order_item.unit_price`
-- calculates `line_amount`
-- calculates `order_total_amount`
-
-This design preserves:
-- pricing integrity
-- order history stability
-- snapshot pricing behavior
-
-Even if `product.price` changes later, existing order items keep the original captured price.
-
-
-
-## Why the workflow is split
-
-Order creation and inventory reservation are intentionally separated.
-
-This makes the lifecycle easier to:
-- understand
-- debug
-- test
-- explain in interviews
-
-It also mirrors real business workflows more clearly:
-
-- order exists
-- order is reserved
-- reservation may be released
-- reserved inventory may be shipped
-
-This explicit state transition model is easier to evolve than a single oversized "create-and-do-everything" endpoint.
-
-
-
-
-## End-to-end demo scenario
-
-A typical demo flow for the current system:
-
-1. Create warehouse
-2. Create category
-3. Create brand
-4. Create product
-5. Create inventory balance
-6. Create order
-7. Reserve order
-8. Inspect inventory balance changes
-9. Inspect inventory movement ledger
-10. Release order reservation (optional path)
-11. Ship order (happy path from `RESERVED`)
-
-This demonstrates:
-- master data setup
-- transactional order creation
-- secure server-side pricing
-- inventory reservation
-- inventory release
-- shipment
-- current-state vs history-table architecture
-- pessimistic locking on hot inventory rows
-
-
-
-
-## Current order statuses
-
-Current implementation uses the following order statuses:
-
-- `NEW`
-- `RESERVED`
-- `RELEASED`
-- `SHIPPED`
-
-At this stage, status values are stored as strings.
-A future improvement would be to apply the same discipline used in inventory:
-- typed enum in application code
-- database constraint on allowed status values
-
-
-
+---
 
 ## Running the project
 
@@ -360,9 +360,7 @@ From the project root:
 .\scripts\run_app.ps1
 ```
 
-This starts the FastAPI development server.
-
-If needed, you can also run it directly:
+Direct alternative:
 
 ```powershell
 fastapi dev app/main.py
@@ -439,13 +437,13 @@ pytest -q -m "not manual"
 .\scripts\run_order_tests.ps1
 ```
 
-### Run manual tests
+### Run only manual tests
 
 ```powershell
 .\scripts\run_manual_tests.ps1
 ```
 
-Manual tests are excluded from the default automated run because they are slower and may intentionally wait on row locks.
+Manual tests are excluded from the default automated run because they are slower and intentionally wait on lock scenarios.
 
 ---
 
@@ -457,19 +455,15 @@ tests/
 ├─ helpers.py
 ├─ inventory/
 ├─ orders/
+├─ payments/
+├─ shipments/
 └─ manual/
 ```
 
-### Test folders
-
-- `tests/inventory` — inventory-only scenarios
-- `tests/orders` — order workflow scenarios
-- `tests/manual` — manual or slow concurrency tests
-
 ### Shared files
 
-- `conftest.py` — test DB session, FastAPI dependency override, DB cleanup
-- `helpers.py` — reusable API helper functions and composite setup helpers
+- `conftest.py` — dependency overrides, DB session, DB cleanup
+- `helpers.py` — API helper functions and composite setup helpers
 
 ---
 
@@ -494,9 +488,33 @@ The automated test suite currently covers:
 - order release wrong status
 - double release protection
 - order ship success
-- order ship wrong status
-- ship-after-release protection
-- double ship protection
+- shipping blocked without paid payment
+- shipping blocked with pending payment
+- shipping blocked with failed payment
+- cancel shipped order forbidden
+- return shipped order success
+- return delivered order success
+- return twice protection
+
+### Shipments
+- shipment creation during shipping
+- get shipment by id
+- filter shipments by order id
+- update carrier / tracking
+- deliver shipment success
+- deliver shipment twice failure
+
+### Payments
+- create payment for order
+- payment complete success
+- payment fail success
+- complete payment twice failure
+- payment creation blocked for shipped order
+- read payments by order id
+- read payment by id
+- create second payment after failed payment
+- block second payment while first is pending
+- block second payment while paid payment exists
 
 ### Manual / concurrency
 - lock timeout behavior for pessimistic row locking
@@ -518,19 +536,82 @@ Typical flow:
 .\scripts\run_tests.ps1
 ```
 
-If you want a completely clean bootstrap, recreate the test database first, then rerun migrations.
+---
+
+## Migration history
+
+The migration history is designed to support fresh bootstrap of new databases, including the dedicated test database.
+
+This is important because the schema evolved through several stages, including:
+
+- migration from `public` to `autoparts_owner`
+- Alembic version table relocation
+- inventory ledger redesign
+- order lifecycle expansion
+- shipment and payment domains
+- multiple payment attempt support
 
 ---
 
-## Notes on migration history
+## Known simplifications
 
-The migration history was made safe for fresh bootstrap of new databases, including the dedicated test database.
+This project intentionally keeps some parts simplified for the current stage.
 
-This is important because the project evolved through multiple schema moves and refactors, including:
+### Full-order return only
+Returns currently operate at the whole-order level.
+Partial returns are not modeled yet.
 
-- creation of `autoparts_owner`
-- movement of tables from `public`
-- Alembic version table relocation
-- subsequent constraint and workflow-related schema changes
+### Order status is still evolving
+The current `order_status` mixes some fulfillment and aggregate-level concepts.
+This is acceptable for the current stage, but a future redesign may separate:
+- fulfillment state
+- payment state
+- aggregate order completion state
 
-As a result, both development and test environments can now be created from zero using migrations.
+### No customer entity yet
+Orders currently store `customer_email` directly.
+A future iteration may introduce:
+- `customer`
+- addresses
+- billing/shipping separation
+
+### No refund flow yet
+Payment supports `REFUNDED` status in the model, but the refund action flow is not implemented yet.
+
+### No split shipments yet
+The current design assumes a simple shipment flow and does not yet model partial or split shipments across multiple shipment records.
+
+---
+
+## Future work
+
+Possible next steps:
+
+- payment refund flow
+- customer entity
+- shipping and billing addresses
+- partial returns
+- split shipments
+- warehouse transfer flow
+- richer order details endpoint combining:
+  - order
+  - items
+  - shipment
+  - payment
+- CI integration
+- coverage reporting
+- OpenAPI / contract polishing
+
+---
+
+## Summary
+
+This project is designed as a realistic transactional backend focused on order fulfillment, inventory correctness, shipment tracking, and payment lifecycle management.
+
+It intentionally favors:
+- explicit domain workflows
+- database-backed business rules
+- audit-friendly ledger design
+- reproducible migrations
+- PostgreSQL-based integration testing
+- clear architectural trade-off documentation

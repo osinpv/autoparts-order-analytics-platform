@@ -122,6 +122,21 @@ def ship_order(client, order_id):
     return response.json()
 
 
+def create_and_complete_payment(client, order_id, payment_method="CARD"):
+    create_response = client.post(
+        f"/orders/{order_id}/payments",
+        json={"payment_method": payment_method},
+    )
+    assert create_response.status_code == 200
+    payment_id = create_response.json()["payment_id"]
+
+    complete_response = client.post(f"/payments/{payment_id}/complete")
+    assert complete_response.status_code == 200
+    assert complete_response.json()["payment_status"] == "PAID"
+
+    return complete_response.json()
+
+
 def create_basic_catalog_setup(
     client,
     *,

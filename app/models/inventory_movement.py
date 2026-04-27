@@ -15,7 +15,7 @@ class InventoryMovement(Base):
             "product_id",
         ),
         CheckConstraint(
-            "movement_type in ('INITIAL_LOAD', 'RECEIVE', 'RESERVE', 'RELEASE', 'SHIP', 'ADJUSTMENT')",
+            "movement_type in ('INITIAL_LOAD', 'RECEIVE', 'RESERVE', 'RELEASE', 'SHIP', 'ADJUSTMENT', 'RETURN')",
             name="ck_inventory_movement_type_allowed",
         ),
         CheckConstraint(

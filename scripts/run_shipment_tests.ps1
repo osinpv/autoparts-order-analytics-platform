@@ -2,7 +2,7 @@ $previousTestDatabaseUrl = $env:TEST_DATABASE_URL
 
 try {
     $env:TEST_DATABASE_URL = "postgresql+psycopg://autoparts_user:autoparts_pass@localhost:5432/autoparts_test"
-    pytest -q tests/inventory -m "not manual"
+    pytest -q tests/shipments -m "not manual"
 }
 finally {
     if ($null -ne $previousTestDatabaseUrl -and $previousTestDatabaseUrl -ne "") {

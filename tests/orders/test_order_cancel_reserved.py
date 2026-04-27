@@ -1,20 +1,20 @@
 from sqlalchemy import text
 
-from tests.helpers import create_order_setup, reserve_order, ship_order
+from tests.helpers import create_order_setup, reserve_order
 
 
-def test_ship_order_success(client, db_session):
+def test_cancel_reserved_order_releases_inventory(client, db_session):
     setup = create_order_setup(
         client,
-        sku="BRK-007",
-        product_name="Performance Brake Pads",
-        price="109.99",
-        warehouse_code="TPA2",
-        warehouse_name="Tampa Overflow Warehouse",
-        region="Florida West",
+        sku="BRK-018",
+        product_name="Cancel Reserved Pads",
+        price="86.99",
+        warehouse_code="CNLRES",
+        warehouse_name="Cancel Reserved Warehouse",
+        region="Florida",
         on_hand_qty=10,
         reserved_qty=0,
-        order_number="SO-300004",
+        order_number="SO-600002",
         customer_email="john@example.com",
         order_qty=2,
     )
@@ -25,19 +25,12 @@ def test_ship_order_success(client, db_session):
     reserve_payload = reserve_order(client, order["order_id"])
     assert reserve_payload["order_status"] == "RESERVED"
 
-    create_payment_response = client.post(
-        f"/orders/{order['order_id']}/payments",
-        json={"payment_method": "CARD"},
-    )
-    assert create_payment_response.status_code == 200
-    payment_id = create_payment_response.json()["payment_id"]
+    cancel_response = client.post(f"/orders/{order['order_id']}/cancel")
+    assert cancel_response.status_code == 200
 
-    complete_payment_response = client.post(f"/payments/{payment_id}/complete")
-    assert complete_payment_response.status_code == 200
-    assert complete_payment_response.json()["payment_status"] == "PAID"
-
-    ship_payload = ship_order(client, order["order_id"])
-    assert ship_payload["order_status"] == "SHIPPED"
+    payload = cancel_response.json()
+    assert payload["order_id"] == order["order_id"]
+    assert payload["order_status"] == "CANCELLED"
 
     balance_row = db_session.execute(
         text("""
@@ -49,7 +42,7 @@ def test_ship_order_success(client, db_session):
     ).fetchone()
 
     assert balance_row is not None
-    assert balance_row[0] == 8
+    assert balance_row[0] == 10
     assert balance_row[1] == 0
 
     order_row = db_session.execute(
@@ -62,21 +55,7 @@ def test_ship_order_success(client, db_session):
     ).fetchone()
 
     assert order_row is not None
-    assert order_row[0] == "SHIPPED"
-
-    shipment_row = db_session.execute(
-        text("""
-            select shipment_number, order_id, shipment_status
-            from autoparts_owner.shipment
-            where order_id = :order_id
-        """),
-        {"order_id": order["order_id"]},
-    ).fetchone()
-
-    assert shipment_row is not None
-    assert shipment_row[0] == f"SHP-{order['order_id']:06d}"
-    assert shipment_row[1] == order["order_id"]
-    assert shipment_row[2] == "SHIPPED"
+    assert order_row[0] == "CANCELLED"
 
     movement_rows = db_session.execute(
         text("""
@@ -100,8 +79,8 @@ def test_ship_order_success(client, db_session):
     assert movement_rows[1][3] == 10
     assert movement_rows[1][4] == 2
 
-    assert movement_rows[2][0] == "SHIP"
+    assert movement_rows[2][0] == "RELEASE"
     assert movement_rows[2][1] == 2
     assert movement_rows[2][2] == "ORDER_ITEM"
-    assert movement_rows[2][3] == 8
+    assert movement_rows[2][3] == 10
     assert movement_rows[2][4] == 0
