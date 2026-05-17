@@ -1,0 +1,25 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: autoparts-api
+  namespace: autoparts
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: autoparts-api
+  template:
+    metadata:
+      labels:
+        app: autoparts-api
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: autoparts-api
+          image: localhost:5000/autoparts-api:local
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: autoparts-api-config

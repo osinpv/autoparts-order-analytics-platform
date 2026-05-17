@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: autoparts-api-config
+  namespace: autoparts
+data:
+  DATABASE_URL: postgresql+psycopg://autoparts_user:autoparts_password@postgres:5432/autoparts_db
