@@ -15,6 +15,9 @@ class Settings(BaseSettings):
         "postgresql+psycopg://autoparts_user:autoparts_pass@localhost:5432/autoparts_db"
     )
 
+    mongo_url: str
+    mongo_db_name: str = "autoparts_docs"
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
